@@ -201,6 +201,19 @@ html.dark .switch .sun{display:none} html.dark .switch .moon{display:block}
 .card-h .idx{color:var(--t3);font-size:14px;line-height:28px;font-variant-numeric:tabular-nums;min-width:22px}
 .card-h .anchor{opacity:0;color:var(--brand-1);font-size:16px;line-height:28px;font-weight:500;transition:opacity .2s}
 .card:hover .anchor,.anchor:focus-visible{opacity:1}
+/* 条目手风琴：默认收起，点头部展开/收起。0fr→1fr 过渡比 max-height 平稳，不用猜高度 */
+.card-h{cursor:pointer}
+.card-h:focus-visible{outline:2px solid var(--brand-1);outline-offset:2px;border-radius:4px}
+.card:not(.open) .card-h{margin-bottom:6px}
+.card:not(.open){padding-bottom:14px}
+.card:not(.open) .badges{margin-bottom:0}
+.card-h .fold{flex:none;display:grid;place-items:center;width:28px;height:28px;margin:-2px -8px -2px 0;border-radius:6px;color:var(--t3);transition:color .2s,background .2s}
+.card-h .fold:hover{color:var(--t1);background:var(--bg-mute)}
+.card-h .fold svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;transform:rotate(-90deg);transition:transform .2s}
+.card.open .card-h .fold svg{transform:none}
+.card-body{display:grid;grid-template-rows:0fr;transition:grid-template-rows .25s ease}
+.card-body>.card-inner{min-height:0;overflow:hidden}
+.card.open .card-body{grid-template-rows:1fr}
 .badges{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px}
 .badge{display:inline-block;border-radius:10px;padding:0 10px;line-height:20px;font-size:12px;font-weight:600;white-space:nowrap;transform:translateY(0)}
 .badge.tip{background:var(--brand-soft);color:var(--brand-1)}
@@ -853,6 +866,7 @@ function scrollToEl(el, { align = 'center', flashEl = el, spyId = el.id, renderE
   spyOff = true;                           // 校正期间别让 spy 把地址栏改成沿途的条目
   const card = CARD_OF.get(renderEl);      // 滚到节块时要预渲染的是节里第一张卡片
   if (card && card.key !== CUR_KEY) renderCard(card, CUR_TERMS, CUR_KEY);
+  if (card) card.el.classList.add('open'); // 条目默认收起：跳转/回退落点先展开再滚，否则闪的是个标题
   let tries = 0, lastY = NaN;
   const settle = () => {
     el.scrollIntoView({block: align});
@@ -927,6 +941,7 @@ const LENS_LABEL = {'死亡率':'换寿命','金钱':'换钱','时间':'换时�
 /* ---------- 构建 DOM ---------- */
 const LABEL = { money:{'0':'不花钱','少':'花少量钱','多':'花不少钱'}, time:{'少':'顺手','中':'花几小时','多':'每天占时间'}, will:{'否':'不用毅力','些':'要一点毅力','是':'要很多毅力'} };
 let CARDS = [], BLOCKS = [];
+let LAST_SEARCHING = false; // 搜索态翻转时才动全部卡片的开合，避免每次筛选都重置
 // 侧栏条目目录：卡片 id → 目录里那一行，节号 → 该节的目录块
 const TOC = new Map(), TOC_SEC = new Map();
 let TOC_ON = null, TOC_SELK = '';
@@ -998,15 +1013,17 @@ function build(sections){
       const id = `e-${e.sec}-${e.n}`;
       const c = document.createElement('article'); c.className='card'; c.id = id;
       c.innerHTML = `
-        <div class="card-h"><span class="idx">${e.n}</span><h3 class="t"></h3><a class="anchor" href="#${id}" aria-label="本条链接">#</a></div>
+        <div class="card-h" role="button" tabindex="0" aria-expanded="false" title="点击展开或收起"><span class="idx">${e.n}</span><h3 class="t"></h3><a class="anchor" href="#${id}" aria-label="本条链接">#</a><b class="fold" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" stroke-linecap="round" stroke-linejoin="round"/></svg></b></div>
         <div class="badges"></div>
+        <div class="card-body"><div class="card-inner">
         <p class="human"></p>
         <div class="rows">
           <div class="k">成本</div><div class="v cost"></div>
           <div class="k">收益</div><div class="v gain"></div>
           <div class="k">备注</div><div class="v note"></div>
         </div>
-        <details class="src"><summary>来源<span class="cnt"></span></summary><div class="body"></div></details>`;
+        <details class="src"><summary>来源<span class="cnt"></span></summary><div class="body"></div></details>
+        </div></div>`;
       const badges = c.querySelector('.badges');
       const add = (cls, text) => { const t=document.createElement('span'); t.className='badge '+cls; t.textContent=text; badges.appendChild(t); };
       if (e.ratio) { const t = document.createElement('span'); t.className = 'badge r' + ({'极高':'3','高':'2','一般':'1'}[e.ratio]);
@@ -1084,6 +1101,10 @@ function apply(){
   const terms = state.q.toLowerCase().split(/\s+/).filter(Boolean);
   const key = terms.join(' ');
   CUR_TERMS = terms; CUR_KEY = key;
+  // 搜索词可能只命中正文：收着看不见。搜索时全部展开，清掉搜索恢复收起。
+  // 只在搜索态翻转时动一次，筛选、翻页不重置用户手动开合的卡片。
+  const searching = terms.length > 0;
+  if (searching !== LAST_SEARCHING){ for (const c of CARDS) c.el.classList.toggle('open', searching); LAST_SEARCHING = searching; }
   let shown = 0, rerender = 0; const perSec = {}, tocSec = {};
   for (const card of CARDS){
     const {e, el} = card;
@@ -1155,6 +1176,23 @@ function wire(){
   document.getElementById('f-sec').addEventListener('click', ev => {
     const a = ev.target.closest('a[data-go]'); if (!a) return;
     ev.preventDefault(); setMenu(false); gotoItem(a.dataset.go, spyLast);
+  });
+  // 条目手风琴：点头部开合；# 锚链接保持原行为不参与开合。搜索命中正文时 apply 会自动展开
+  const listEl = document.getElementById('list');
+  const toggleCard = h => {
+    const c = h.closest('.card'); if (!c) return;
+    h.setAttribute('aria-expanded', String(c.classList.toggle('open')));
+  };
+  listEl.addEventListener('click', ev => {
+    const h = ev.target.closest('.card-h'); if (!h) return;
+    if (ev.target.closest('.anchor')) return;
+    toggleCard(h);
+  });
+  listEl.addEventListener('keydown', ev => {
+    const h = ev.target.closest?.('.card-h');
+    if (!h || ev.target !== h) return; // 焦点在头部自身才拦截，锚链接上的回车仍走浏览器默认
+    if (ev.key !== 'Enter' && ev.key !== ' ') return;
+    ev.preventDefault(); toggleCard(h);
   });
   document.getElementById('f-dispute').addEventListener('change', e => { state.dispute = e.target.checked; apply(); toTop(); });
   document.getElementById('f-todo').addEventListener('change', e => { state.todo = e.target.checked; apply(); toTop(); });
@@ -1467,6 +1505,8 @@ document.addEventListener('keydown', ev => { if (ev.key === 'Escape' && !TIP.hid
       // 落到一节的第一条时滚它所在的节块，节标题跟着进视野——和点「见第 13 节」
       // 跳过去看到的是同一屏，地址栏也是同一个 #e-13-1
       const land = target ? scrollAnchor(target) : null;
+      // 条目默认收起：分享链接/刷新落地先把目标展开再滚，否则定位到个空标题
+      if (target){ const tc = target.classList.contains('card') ? target : target.querySelector('.card'); if (tc) tc.classList.add('open'); }
       land?.scrollIntoView();
       // 卡片是 content-visibility:auto，首次定位后高度才准，下一帧再对一次
       if (land) requestAnimationFrame(() => land.scrollIntoView());
